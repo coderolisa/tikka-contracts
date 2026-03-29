@@ -165,8 +165,11 @@ pub enum DataKey {
     RandomnessRequested,    // bool  - true when oracle request is pending
     RandomnessRequestLedger, // u32  - ledger sequence when the request was made
     TicketOwner(u32), // ticket_number -> Address
+    ReferralCount(Address),
     PendingAdmin,
 }
+
+const REFERRAL_FEE_BP: u32 = 1000; // 10% of protocol fee goes to referrer
 
 // --- Error Types ---
 
@@ -273,6 +276,19 @@ fn write_ticket_count(env: &Env, buyer: &Address, count: u32) {
     env.storage()
         .persistent()
         .set(&DataKey::TicketCount(buyer.clone()), &count);
+}
+
+fn read_referral_count(env: &Env, referrer: &Address) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::ReferralCount(referrer.clone()))
+        .unwrap_or(0)
+}
+
+fn write_referral_count(env: &Env, referrer: &Address, count: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::ReferralCount(referrer.clone()), &count);
 }
 
 fn next_ticket_id(env: &Env) -> u32 {
@@ -524,6 +540,25 @@ impl Contract {
     }
 
     pub fn buy_ticket(env: Env, buyer: Address) -> Result<u32, Error> {
+        buy_ticket_internal(env, buyer, None)
+    }
+
+    pub fn buy_ticket_with_referrer(
+        env: Env,
+        buyer: Address,
+        referrer: Address,
+    ) -> Result<u32, Error> {
+        if referrer == buyer {
+            return Err(Error::InvalidParameters);
+        }
+        buy_ticket_internal(env, buyer, Some(referrer))
+    }
+
+    fn buy_ticket_internal(
+        env: Env,
+        buyer: Address,
+        referrer: Option<Address>,
+    ) -> Result<u32, Error> {
         require_not_paused(&env)?;
         buyer.require_auth();
         let mut raffle = read_raffle(&env)?;
@@ -604,13 +639,36 @@ impl Contract {
             .try_transfer(&buyer, &contract_address, &raffle.ticket_price)
             .map_err(|_| Error::TokenTransferFailed)?;
 
-        // Route protocol fee to treasury from contract's balance.
+        // Route protocol fee to referrer + treasury from contract's balance.
         if fee_amount > 0 {
-            if let Some(treasury_address) = treasury_address {
-                token_client
-                    .try_transfer(&contract_address, &treasury_address, &fee_amount)
-                    .map_err(|_| Error::TokenTransferFailed)?;
+            let referral_share = if let Some(referrer_address) = referrer.clone() {
+                // Referrer can't be buyer, checked above for explicit referrer.
+                let computed = (fee_amount * REFERRAL_FEE_BP as i128) / 10_000;
+                if computed > 0 {
+                    token_client
+                        .try_transfer(&contract_address, &referrer_address, &computed)
+                        .map_err(|_| Error::TokenTransferFailed)?;
+                    let current = read_referral_count(&env, &referrer_address);
+                    write_referral_count(
+                        &env,
+                        &referrer_address,
+                        current.checked_add(1).ok_or(Error::ArithmeticOverflow)?,
+                    );
+                }
+                computed
             } else {
+                0i128
+            };
+
+            let treasury_share = fee_amount.checked_sub(referral_share).ok_or(Error::ArithmeticOverflow)?;
+            if let Some(treasury_address) = treasury_address {
+                if treasury_share > 0 {
+                    token_client
+                        .try_transfer(&contract_address, &treasury_address, &treasury_share)
+                        .map_err(|_| Error::TokenTransferFailed)?;
+                }
+            } else {
+                // no treasury configured for non-zero fee
                 return Err(Error::InvalidParameters);
             }
         }
@@ -1665,6 +1723,11 @@ impl Contract {
     /// Get total ticket count
     pub fn get_ticket_count(env: Env) -> u32 {
         get_ticket_count(&env)
+    }
+
+    /// Get total referrals for a referrer (tracked per user)
+    pub fn get_referral_count(env: Env, referrer: Address) -> u32 {
+        read_referral_count(&env, &referrer)
     }
 
     /// Get fairness proof data for a finalized raffle

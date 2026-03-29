@@ -70,6 +70,67 @@ fn setup_raffle_env(
     (client, creator, buyer, admin_client, factory, factory_admin)
 }
 
+fn setup_raffle_env_with_price(
+    env: &Env,
+    source: RandomnessSource,
+    oracle: Option<Address>,
+    fee_bp: u32,
+    treasury: Option<Address>,
+    ticket_price: i128,
+) -> (
+    ContractClient<'_>,
+    Address,
+    Address,
+    token::StellarAssetClient<'_>,
+    Address,
+    Address,
+) {
+    let creator = Address::generate(env);
+    let buyer = Address::generate(env);
+    let admin = Address::generate(env);
+    let factory_admin = Address::generate(env);
+
+    #[contract]
+    pub struct DummyFactory;
+    #[contractimpl]
+    impl DummyFactory {}
+    let factory = env.register(DummyFactory, ());
+
+    let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_id = token_contract.address();
+    let admin_client = token::StellarAssetClient::new(env, &token_id);
+
+    admin_client.mint(&creator, &1_000i128);
+    admin_client.mint(&buyer, &1_000i128);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(env, &contract_id);
+
+    let mut prizes = Vec::new(env);
+    prizes.push_back(10000);
+
+    let config = RaffleConfig {
+        description: String::from_str(env, "Audit Raffle"),
+        end_time: 0,
+        max_tickets: 5,
+        allow_multiple: false,
+        ticket_price,
+        payment_token: token_id,
+        prize_amount: 100i128,
+        prizes,
+        randomness_source: source,
+        oracle_address: oracle,
+        protocol_fee_bp: fee_bp,
+        treasury_address: treasury,
+        swap_router: None,
+        tikka_token: None,
+    };
+
+    client.init(&factory, &factory_admin, &creator, &config);
+
+    (client, creator, buyer, admin_client, factory, factory_admin)
+}
+
 fn raffle_finalized_event(env: &Env, contract_address: &Address) -> RaffleFinalized {
     let events = env.events().all();
     for event in events.iter() {
@@ -147,6 +208,36 @@ fn test_protocol_fees() {
     // Prize flow unchanged by protocol fee on purchase.
     assert_eq!(token_client.balance(&winner), 100i128);
     assert_eq!(token_client.balance(&treasury), 5i128);
+}
+
+#[test]
+fn test_referrer_gets_share_of_fee_and_count_increments() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let treasury = Address::generate(&env);
+    let referrer = Address::generate(&env);
+
+    let (client, _creator, _buyer, admin_client, _, _) = setup_raffle_env_with_price(
+        &env,
+        RandomnessSource::Internal,
+        None,
+        1000,
+        Some(treasury.clone()),
+        100i128,
+    );
+    let token_client = token::Client::new(&env, &admin_client.address);
+
+    client.deposit_prize();
+
+    let buyer = Address::generate(&env);
+    admin_client.mint(&buyer, &100i128);
+
+    client.buy_ticket_with_referrer(&buyer, &referrer);
+
+    assert_eq!(token_client.balance(&referrer), 1i128);
+    assert_eq!(token_client.balance(&treasury), 9i128);
+    assert_eq!(client.get_referral_count(&referrer), 1u32);
 }
 
 #[test]
