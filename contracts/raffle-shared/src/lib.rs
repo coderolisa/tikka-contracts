@@ -219,7 +219,24 @@ pub struct RaffleConfig {
     pub payment_token: Address,
     /// Total prize amount denominated in the same payment token.
     pub prize_amount: i128,
-    /// Prize distribution vector; each value maps to winner allocation units.
+    /// Prize distribution vector defining the split of `prize_amount` across tiers.
+    /// 
+    /// Each entry is a basis-point share (0–10,000) applied to `prize_amount`.
+    /// The vector's length determines the number of winners drawn (one per tier).
+    /// All entries must sum to exactly 10,000 basis points (100%).
+    /// 
+    /// Constraints:
+    /// - `prizes.len()` must be in `1..=MAX_PRIZES` (currently 10)
+    /// - `prizes.len()` must be `<= max_tickets` (cannot have more winners than tickets)
+    /// - Each entry must be `<= 10,000`
+    /// - The sum of all entries must equal exactly 10,000
+    /// 
+    /// Example: `vec![5000, 3000, 2000]` creates a three-tier raffle where:
+    /// - 1st place wins 50% of `prize_amount`
+    /// - 2nd place wins 30% of `prize_amount`
+    /// - 3rd place wins 20% of `prize_amount`
+    /// 
+    /// Example: `vec![10000]` creates a winner-takes-all raffle (single winner gets 100%).
     pub prizes: Vec<u32>,
     /// Randomness source strategy selected for the raffle.
     pub randomness_source: RandomnessSource,

@@ -65,6 +65,43 @@ The amount (denominated in a Stellar asset) awarded to the winner(s) of a raffle
 
 **Code reference**: [`contracts/raffle-instance/src/lib.rs`](../contracts/raffle-instance/src/lib.rs) — `deposit_prize()` entry point
 
+### Prize Distribution (prizes vector)
+
+The `prizes` field in `RaffleConfig` defines how the total `prize_amount` is split among winners. It is a vector of basis-point values (where 10,000 basis points = 100%) that must sum to exactly 10,000.
+
+**Key rules:**
+- Each entry is a basis-point share of `prize_amount` (0–10,000)
+- The vector's **length** determines the number of winners drawn (one per tier)
+- All entries must sum to exactly 10,000 basis points
+- Length must be in `1..=MAX_PRIZES` (currently 10)
+- Length must be `<= max_tickets` (cannot have more winners than tickets)
+
+**Worked example:**
+
+Suppose a raffle has `prize_amount = 1,000 USDC` and `prizes = vec![5000, 3000, 2000]`:
+
+- **Number of winners**: 3 (the vector has 3 entries)
+- **1st place** (tier 0): `1,000 × (5000 / 10,000) = 500 USDC` (50%)
+- **2nd place** (tier 1): `1,000 × (3000 / 10,000) = 300 USDC` (30%)
+- **3rd place** (tier 2): `1,000 × (2000 / 10,000) = 200 USDC` (20%)
+- **Total distributed**: 500 + 300 + 200 = 1,000 USDC ✓
+
+**Common patterns:**
+- Winner-takes-all: `vec![10000]` — one winner gets 100%
+- Equal split (2 winners): `vec![5000, 5000]` — two winners get 50% each
+- Equal split (3 winners): `vec![3333, 3333, 3334]` — three winners (note: last tier gets the rounding remainder to sum to 10,000)
+- Top-heavy distribution: `vec![7000, 2000, 1000]` — 70% / 20% / 10%
+
+**Invalid examples:**
+- `vec![5000]` — rejected: sum is 5,000, not 10,000
+- `vec![5000, 3000]` — rejected: sum is 8,000, not 10,000
+- `vec![10001]` — rejected: single entry exceeds 10,000
+- `vec![]` — rejected: empty vector (no winners)
+
+The `calculate_tier_prize` helper (in `contracts/raffle-instance/src/helpers.rs`) computes the actual payout for each tier by applying the basis-point share to `prize_amount`.
+
+**Code reference**: [`contracts/raffle-shared/src/lib.rs`](../contracts/raffle-shared/src/lib.rs) — `RaffleConfig.prizes`; [`contracts/raffle-instance/src/helpers.rs`](../contracts/raffle-instance/src/helpers.rs) — `calculate_tier_prize`
+
 ### Claimed and Swept Prizes
 
 A **claimed** prize is transferred to its winner through `claim_prize`. A

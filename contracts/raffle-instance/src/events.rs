@@ -35,7 +35,9 @@ pub struct RaffleCreated {
     pub payment_token: Address,
     /// Total prize pool deposited into the raffle.
     pub prize_amount: i128,
-    /// Prize tier weights (basis points), 0-based supported levels.
+    /// Prize distribution vector: one entry per prize tier, each a basis-point
+    /// share (0–10,000) of `prize_amount`. Must sum to exactly 10,000.
+    /// The vector's length determines the number of winners drawn.
     pub prizes: Vec<u32>,
     /// Free-text description set by the creator.
     pub description: String,
